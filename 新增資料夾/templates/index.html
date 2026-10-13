@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>机器人控制</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: system-ui, sans-serif;
+        }
+
+        body {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            background: #0f172a;
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            width: 260px;
+            background: #1e293b;
+            color: #e2e8f0;
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            gap: 0.6rem;
+            flex-shrink: 0;
+            overflow-y: auto;
+        }
+
+        .sidebar h1 {
+            font-size: 1.1rem;
+            color: #f8fafc;
+            padding-bottom: 0.8rem;
+            border-bottom: 1px solid #334155;
+            margin-bottom: 0.5rem;
+        }
+
+        .waypoint-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.8rem;
+            background: #243347;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #cbd5e1;
+            font-size: 0.9rem;
+            cursor: pointer;
+            text-align: left;
+            width: 100%;
+            transition: background 0.15s;
+        }
+
+        .waypoint-btn:hover:not(:disabled) {
+            background: #2d3f56;
+            border-color: #4b6382;
+        }
+
+        .waypoint-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .waypoint-btn .icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: #334155;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #94a3b8;
+            flex-shrink: 0;
+        }
+
+        .waypoint-btn .info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .waypoint-btn .name {
+            font-weight: 500;
+        }
+
+        .waypoint-btn .coords {
+            font-size: 0.7rem;
+            color: #64748b;
+            font-family: monospace;
+        }
+
+        .status {
+            margin-top: auto;
+            padding-top: 1rem;
+            border-top: 1px solid #334155;
+        }
+
+        .status .label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #475569;
+            margin-bottom: 0.4rem;
+        }
+
+        .status .value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #e0f2fe;
+            font-family: monospace;
+        }
+
+        /* 地图区域 */
+        .map-container {
+            flex: 1;
+            position: relative;
+            background: #0a0e17;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .map-image {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            user-select: none;
+        }
+
+        /* 加载提示 */
+        .loading {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.9);
+            color: #93c5fd;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <h1>🤖 机器人控制台</h1>
+        <div id="waypointList"></div>
+
+        <div class="status">
+            <div class="label">当前位置</div>
+            <div class="value" id="currentPos">等待数据...</div>
+        </div>
+    </aside>
+
+    <div class="map-container">
+        <img class="map-image" id="mapImage" src="static/school.png" alt="地图">
+        <div class="loading" id="loading">正在发送指令...</div>
+    </div>
+
+    <script>
+        // ========================================
+        // 预设目标点（Flask 通过 render_template 注入）
+        // 格式：[{id, name, x, y}, ...]
+        // 这里先写死演示，你换成 {{ waypoints | tojson }} 即可
+        // ========================================
+        const WAYPOINTS = {{ waypoints | tojson }};
+
+        const waypointListEl = document.getElementById('waypointList');
+        const currentPosEl = document.getElementById('currentPos');
+        const loadingEl = document.getElementById('loading');
+
+        // ========================================
+        // 渲染侧边栏按钮
+        // ========================================
+        WAYPOINTS.forEach(wp => {
+            const btn = document.createElement('button');
+            btn.className = 'waypoint-btn';
+            btn.innerHTML = `
+                <span class="icon">${wp.id}</span>
+                <span class="info">
+                    <span class="name">${wp.name}</span>
+                    <span class="coords">(${wp.x}, ${wp.y})</span>
+                </span>
+            `;
+            btn.onclick = () => sendCommand(wp, btn);
+            waypointListEl.appendChild(btn);
+        });
+
+        // ========================================
+        // 点击按钮 → 发送给 Flask
+        // ========================================
+        async function sendCommand(wp, btn) {
+            // 禁用所有按钮，防止重复点击
+            document.querySelectorAll('.waypoint-btn').forEach(b => b.disabled = true);
+            loadingEl.classList.add('show');
+
+            try {
+                const res = await fetch('/api/navigate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(wp)
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    alert('发送失败: ' + (data.message || '未知错误'));
+                }
+            } catch (err) {
+                alert('网络错误: ' + err.message);
+            } finally {
+                loadingEl.classList.remove('show');
+                // 3 秒后重新启用按钮
+                setTimeout(() => {
+                    document.querySelectorAll('.waypoint-btn').forEach(b => b.disabled = false);
+                }, 3000);
+            }
+        }
+
+        // ========================================
+        // 轮询机器人位置（可选）
+        // ========================================
+        async function pollStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                currentPosEl.textContent = `(${data.x.toFixed(1)}, ${data.y.toFixed(1)})`;
+            } catch (e) {
+                // 忽略
+            }
+        }
+
+        setInterval(pollStatus, 1000);
+        pollStatus();
+    </script>
+</body>
+</html>
